@@ -1,0 +1,17 @@
+[package]
+name = "egui_gpu_plot"
+version = "0.1.0"
+edition = "2021"
+
+[[example]]
+name = "lorenz"
+
+[dependencies]
+bytemuck = "1.12"
+
+egui = { git =  "https://github.com/emilk/egui" }
+egui-wgpu = { git =  "https://github.com/emilk/egui" }
+wgpu = "0.13"
+
+[dev-dependencies]
+eframe = { git = "https://github.com/emilk/egui", features = ["wgpu"] }

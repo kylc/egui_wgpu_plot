@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
-use eframe::egui::plot::{Legend, PlotImage};
-use eframe::egui::{self, plot::PlotBounds};
-use eframe::emath::Vec2;
-use wgpu;
+use eframe::egui;
+use egui_plot::{Legend, PlotBounds, PlotImage};
+use egui_wgpu::wgpu;
 
 use egui_gpu_plot::*;
 
@@ -36,7 +35,7 @@ impl GpuPlot {
         wgpu_render_state
             .renderer
             .write()
-            .paint_callback_resources
+            .callback_resources
             .insert(plot);
 
         let q = [10.0, 28.0, 8.0 / 3.0];
@@ -83,7 +82,7 @@ where
 
         let position = [s[0], s[2]];
         let normal = egui::Vec2::new(ds[0], ds[2]).normalized().rot90();
-        let color = egui::color::Hsva::new(pct, 0.85, 0.5, 1.0).to_rgba_premultiplied();
+        let color = ecolor::Hsva::new(pct, 0.85, 0.5, 1.0).to_rgba_premultiplied();
 
         vs.push(Vertex {
             position,
@@ -130,11 +129,11 @@ impl eframe::App for GpuPlot {
             }
 
             let mut bounds = PlotBounds::NOTHING;
-            let resp = egui::plot::Plot::new("my_plot")
+            let resp = egui_plot::Plot::new("my_plot")
                 .legend(Legend::default())
                 // Must set margins to zero or the image and plot bounds will
                 // constantly fight, expanding the plot to infinity.
-                .set_margin_fraction(Vec2::new(0.0, 0.0))
+                .set_margin_fraction(egui::Vec2::new(0.0, 0.0))
                 .include_x(-25.0)
                 .include_x(25.0)
                 .include_y(0.0)
@@ -156,7 +155,7 @@ impl eframe::App for GpuPlot {
 
                     if self.show_cpu {
                         ui.line(
-                            egui::plot::Line::new(egui::plot::PlotPoints::from_iter(
+                            egui_plot::Line::new(egui_plot::PlotPoints::from_iter(
                                 self.points
                                     .iter()
                                     .map(|p| [p.position[0] as f64, p.position[1] as f64]),
@@ -181,7 +180,7 @@ impl eframe::App for GpuPlot {
                 let wgpu_render_state = frame.wgpu_render_state().unwrap();
                 let mut renderer = wgpu_render_state.renderer.write();
 
-                let plot: &GpuAcceleratedPlot = renderer.paint_callback_resources.get().unwrap();
+                let plot: &GpuAcceleratedPlot = renderer.callback_resources.get().unwrap();
                 let texture_view = plot.create_view();
 
                 renderer.update_egui_texture_from_wgpu_texture(
@@ -206,6 +205,7 @@ fn main() {
     eframe::run_native(
         "GPU Accelerated Plotter",
         native_options,
-        Box::new(|cc| Box::new(GpuPlot::new(cc).unwrap())),
-    );
+        Box::new(|cc| Ok(Box::new(GpuPlot::new(cc).unwrap()))),
+    )
+    .unwrap();
 }

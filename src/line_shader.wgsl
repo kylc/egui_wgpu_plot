@@ -12,8 +12,8 @@ struct Uniforms {
 @group(0) @binding(0)
 var<uniform> uniforms: Uniforms;
 
-let LINE_WIDTH: f32 = 0.002;
-let FEATHER: f32 = 0.50;
+const LINE_WIDTH: f32 = 0.002;
+const FEATHER: f32 = 0.50;
 
 @vertex
 fn vs_main(@location(0) position: vec2<f32>,

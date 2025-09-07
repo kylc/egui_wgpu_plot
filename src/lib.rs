@@ -1,7 +1,9 @@
-use std::{iter, sync::Arc};
+use std::sync::Arc;
 
-use egui::plot::PlotBounds;
-use wgpu::{util::DeviceExt, TextureViewDescriptor};
+use egui_plot::PlotBounds;
+use egui_wgpu::wgpu;
+use egui_wgpu::wgpu::{util::DeviceExt, TextureViewDescriptor};
+use egui_wgpu::CallbackTrait;
 
 const MSAA_SAMPLE_COUNT: u32 = 1;
 const MAX_POINTS: usize = 5_000_000;
@@ -71,21 +73,23 @@ impl GpuAcceleratedPlot {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4],
                 }],
+                compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: target_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
+                compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleStrip,
@@ -97,6 +101,7 @@ impl GpuAcceleratedPlot {
                 ..Default::default()
             },
             multiview: None,
+            cache: None,
         });
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -105,17 +110,13 @@ impl GpuAcceleratedPlot {
                 x_bounds: [-1.0, 1.0],
                 y_bounds: [-1.0, 1.0],
             }]),
-            usage: wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::MAP_WRITE
-                | wgpu::BufferUsages::UNIFORM,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
         });
 
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("egui_plot_vertices"),
             contents: bytemuck::cast_slice(&vec![Vertex::default(); MAX_POINTS]),
-            usage: wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::MAP_WRITE
-                | wgpu::BufferUsages::VERTEX,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::VERTEX,
         });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -171,6 +172,7 @@ impl GpuAcceleratedPlot {
             dimension: wgpu::TextureDimension::D2,
             format: target_format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
         });
 
         let view = texture.create_view(&TextureViewDescriptor::default());
@@ -180,12 +182,6 @@ impl GpuAcceleratedPlot {
 
     pub fn create_view(&self) -> wgpu::TextureView {
         self.texture
-            .0
-            .create_view(&wgpu::TextureViewDescriptor::default())
-    }
-
-    fn create_multisampled_view(&self) -> wgpu::TextureView {
-        self.multisampled_texture
             .0
             .create_view(&wgpu::TextureViewDescriptor::default())
     }
@@ -234,52 +230,50 @@ impl GpuAcceleratedPlot {
         }
     }
 
-    pub fn render(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let mut encoder =
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        {
-            let view = self.create_view();
-            let msaa_view = self.create_multisampled_view();
-
-            // Render directly to the texture if no MSAA, or use the
-            // multisampled buffer and resolve to the texture if using MSAA.
-            let rpass_color_attachment = if MSAA_SAMPLE_COUNT == 1 {
-                wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: true,
-                    },
-                }
-            } else {
-                wgpu::RenderPassColorAttachment {
-                    view: &msaa_view,
-                    resolve_target: Some(&view),
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: false,
-                    },
-                }
-            };
-
-            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(rpass_color_attachment)],
-                depth_stencil_attachment: None,
-            });
-
-            self.render_onto_renderpass(&mut rpass);
-        }
-
-        queue.submit(iter::once(encoder.finish()));
-    }
-
-    pub fn render_onto_renderpass<'rp>(&'rp self, rpass: &mut wgpu::RenderPass<'rp>) {
+    pub fn render_onto_renderpass(&self, rpass: &mut wgpu::RenderPass<'static>) {
         rpass.set_pipeline(&self.pipeline);
         rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         rpass.set_bind_group(0, &self.bind_group, &[]);
         rpass.draw(0..self.vertex_count, 0..1);
+    }
+}
+
+struct PlotCallback {
+    dirty: bool,
+    rect: egui::Rect,
+    bounds: PlotBounds,
+    points: Arc<Vec<Vertex>>,
+}
+
+impl CallbackTrait for PlotCallback {
+    fn prepare(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        _screen_descriptor: &egui_wgpu::ScreenDescriptor,
+        _egui_encoder: &mut wgpu::CommandEncoder,
+        callback_resources: &mut egui_wgpu::CallbackResources,
+    ) -> Vec<wgpu::CommandBuffer> {
+        let plot: &mut GpuAcceleratedPlot = callback_resources.get_mut().unwrap();
+        plot.prepare(
+            device,
+            queue,
+            [self.rect.width() as u32, self.rect.height() as u32],
+            &self.bounds,
+            &self.points,
+            self.dirty,
+        );
+        vec![]
+    }
+
+    fn paint(
+        &self,
+        _info: egui::PaintCallbackInfo,
+        render_pass: &mut wgpu::RenderPass<'static>,
+        callback_resources: &egui_wgpu::CallbackResources,
+    ) {
+        let plot: &GpuAcceleratedPlot = callback_resources.get().unwrap();
+        plot.render_onto_renderpass(render_pass);
     }
 }
 
@@ -289,24 +283,13 @@ pub fn egui_wgpu_callback(
     rect: egui::Rect,
     dirty: bool,
 ) -> egui::PaintCallback {
-    let cb =
-        egui_wgpu::CallbackFn::new().prepare(move |device, queue, paint_callback_resources| {
-            let plot: &mut GpuAcceleratedPlot = paint_callback_resources.get_mut().unwrap();
-
-            plot.prepare(
-                device,
-                queue,
-                [rect.width() as u32, rect.height() as u32],
-                &bounds,
-                &points,
-                dirty,
-            );
-
-            plot.render(device, queue);
-        });
-
-    egui::PaintCallback {
+    egui_wgpu::Callback::new_paint_callback(
         rect,
-        callback: Arc::new(cb),
-    }
+        PlotCallback {
+            dirty,
+            rect,
+            bounds,
+            points,
+        },
+    )
 }

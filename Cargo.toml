@@ -9,9 +9,8 @@ name = "lorenz"
 [dependencies]
 bytemuck = "1.12"
 
-egui = { git =  "https://github.com/emilk/egui" }
-egui-wgpu = { git =  "https://github.com/emilk/egui" }
-wgpu = "0.13"
-
-[dev-dependencies]
-eframe = { git = "https://github.com/emilk/egui", features = ["wgpu"] }
+eframe = { version = "0.31", features = ["wgpu"] }
+egui = "0.31"
+egui_plot = "0.31"
+egui-wgpu = "0.31"
+ecolor = "0.31"
